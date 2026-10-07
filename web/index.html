@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>old_eci collector</title>
+<style>
+  :root { --bg:#0f1216; --panel:#171b21; --panel2:#1e232b; --line:#2b323c;
+          --fg:#e7ecf2; --muted:#93a1b1; --accent:#4ea1ff; --ok:#37c27b;
+          --warn:#e8b23a; --err:#ef5f5f; --run:#4ea1ff; --pending:#6b7686; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.45 "Segoe UI", system-ui, Arial, sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:12px 18px;
+           background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header .spacer { flex:1; }
+  .badge { background:var(--panel2); border:1px solid var(--line); padding:3px 8px;
+           border-radius:20px; font-size:12px; color:var(--muted); }
+  .badge.bad { color:var(--err); border-color:var(--err); }
+  nav { display:flex; gap:6px; padding:10px 18px; background:var(--panel); border-bottom:1px solid var(--line);
+        position:sticky; top:49px; z-index:4; }
+  nav button { background:transparent; color:var(--muted); border:1px solid transparent;
+               padding:6px 12px; border-radius:8px; cursor:pointer; font-size:13px; }
+  nav button.active { background:var(--panel2); color:var(--fg); border-color:var(--line); }
+  main { padding:18px; max-width:1500px; margin:0 auto; }
+  .grid { display:grid; gap:12px; }
+  .cards { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .card .k { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .card .v { font-size:22px; font-weight:600; margin-top:4px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .panel h2 { font-size:14px; margin:0 0 10px; color:var(--muted); font-weight:600;
+              text-transform:uppercase; letter-spacing:.05em; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  button.act { background:var(--accent); color:#04121f; border:0; padding:6px 12px; border-radius:8px;
+               cursor:pointer; font-weight:600; font-size:13px; }
+  button.act.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button.act.warn { background:var(--warn); color:#231a02; }
+  button.act.err { background:var(--err); color:#2a0606; }
+  button.act:disabled { opacity:.45; cursor:default; }
+  input, select { background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+                  border-radius:8px; padding:6px 9px; font-size:13px; }
+  input[type=checkbox] { transform:translateY(1px); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:12px; position:sticky; top:0;
+       background:var(--panel); z-index:1; }
+  tbody tr:hover { background:#1b2028; }
+  .scroll { max-height:60vh; overflow:auto; border:1px solid var(--line); border-radius:10px; }
+  .chip { display:inline-block; padding:1px 8px; border-radius:20px; font-size:11px;
+          border:1px solid var(--line); color:var(--muted); }
+  .s-done{color:var(--ok);border-color:#20563c} .s-running{color:var(--run);border-color:#1d3f66}
+  .s-pending{color:var(--pending)} .s-error{color:var(--err);border-color:#5c2626}
+  .s-cancelled{color:var(--warn);border-color:#5c4a1e}
+  .bar { height:8px; background:var(--panel2); border-radius:6px; overflow:hidden; margin-top:6px; }
+  .bar > i { display:block; height:100%; background:var(--accent); }
+  .muted { color:var(--muted); }
+  .small { font-size:12px; }
+  pre { background:#0b0e12; border:1px solid var(--line); border-radius:8px; padding:10px;
+        overflow:auto; max-height:40vh; font-size:12px; }
+  .l1 { color:#c3cdd9; font-size:12px; }
+  .flex2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .kpi-ok { color:var(--ok); } .kpi-err { color:var(--err); } .kpi-run { color:var(--run); }
+  .toast { position:fixed; right:16px; bottom:16px; background:var(--panel2);
+           border:1px solid var(--line); padding:10px 14px; border-radius:10px;
+           font-size:13px; opacity:0; transition:opacity .25s; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>old_eci collector</h1>
+  <span class="badge" id="hdr-db">—</span>
+  <span class="badge" id="hdr-worker">worker: …</span>
+  <button class="act ghost" id="workerRestart" hidden
+          title="queued jobs are not being picked up - start a fresh worker">restart worker</button>
+  <span class="spacer"></span>
+  <label class="small muted"><input type="checkbox" id="autoToggle"> auto mode</label>
+  <span class="badge" id="hdr-auto">auto: —</span>
+</header>
+
+<nav>
+  <button data-tab="dash" class="active">Dashboard</button>
+  <button data-tab="catalog">Catalog</button>
+  <button data-tab="parts">Parts &amp; collection</button>
+  <button data-tab="data">Data</button>
+  <button data-tab="epic">EPIC processor</button>
+  <button data-tab="logs">Logs</button>
+</nav>
+
+<main>
+  <!-- ------------------------------------------------------------ dashboard -->
+  <section id="tab-dash">
+    <div class="grid cards" id="kpis"></div>
+    <div class="panel">
+      <h2>Collector</h2>
+      <div class="row">
+        <span id="workerState" class="small muted">…</span>
+        <span class="spacer" style="flex:1"></span>
+        <label class="small muted">workers
+          <select id="workersSel">
+            <option>2</option><option>3</option><option>4</option><option selected>6</option>
+            <option>8</option><option>10</option><option>16</option>
+          </select>
+        </label>
+        <label class="small muted">discover cap <input id="discoverMax" type="number" style="width:80px"></label>
+        <button class="act ghost" id="saveSettings">save</button>
+      </div>
+      <div id="jobsLive" style="margin-top:12px"></div>
+    </div>
+    <div class="panel">
+      <h2>States</h2>
+      <div class="scroll"><table id="statesMini"></table></div>
+    </div>
+    <div class="panel">
+      <h2>Relation types &amp; genders collected</h2>
+      <div class="small muted" id="relNote"></div>
+      <div class="flex2" style="margin-top:10px">
+        <div><table id="relTable"></table></div>
+        <div><table id="genTable"></table></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Recent events</h2>
+      <div class="scroll"><table id="eventsDash"></table></div>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------------------- catalog -->
+  <section id="tab-catalog" hidden>
+    <div class="panel">
+      <h2>States</h2>
+      <div class="row">
+        <button class="act" id="seedStates">Seed states</button>
+        <button class="act ghost" id="seedAllAcs">Seed ACs for every state</button>
+        <span class="small muted">from the server's existing geo tables when present, else the live API</span>
+      </div>
+      <div class="scroll" style="margin-top:10px"><table id="statesTable"></table></div>
+    </div>
+    <div class="panel" id="acPanel" hidden>
+      <h2>ACs — <span id="acStateLabel"></span></h2>
+      <div class="row"><button class="act" id="seedAcs">Seed ACs for this state</button></div>
+      <div class="scroll" style="margin-top:10px"><table id="acsTable"></table></div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------- parts/collect -->
+  <section id="tab-parts" hidden>
+    <div class="panel">
+      <h2>Select area</h2>
+      <div class="row">
+        <select id="pState"></select>
+        <select id="pAc"></select>
+        <input id="pFilter" placeholder="part no or name filter" style="width:200px">
+        <select id="pStatus">
+          <option value="">all statuses</option>
+          <option value="pending">pending</option>
+          <option value="done">done</option>
+          <option value="error">error</option>
+          <option value="running">running</option>
+        </select>
+        <button class="act ghost" id="pLoad">load</button>
+        <span class="spacer" style="flex:1"></span>
+        <button class="act" id="collectMissing">Collect this AC (auto queue)</button>
+        <button class="act ghost" id="refreshCurParts">refresh current-roll parts</button>
+      </div>
+      <div class="row small muted" style="margin-top:8px" id="pSummary"></div>
+    </div>
+    <div class="panel">
+      <h2>Old parts (2003 roll)</h2>
+      <div class="scroll"><table id="partsTable"></table></div>
+    </div>
+    <div class="panel" id="partDetail" hidden>
+      <h2>Part detail</h2>
+      <div id="partDetailBody"></div>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------------------- data -->
+  <section id="tab-data" hidden>
+    <div class="panel">
+      <h2>Harvested electors</h2>
+      <div class="row">
+        <select id="dState"></select>
+        <select id="dAc"></select>
+        <input id="dPart" placeholder="old part" style="width:90px">
+        <input id="dCurPart" placeholder="current part" style="width:100px">
+        <input id="dEpic" placeholder="EPIC contains" style="width:150px">
+        <input id="dName" placeholder="name contains" style="width:170px">
+        <button class="act ghost" id="dLoad">search</button>
+        <span class="spacer" style="flex:1"></span>
+        <a class="act" id="dExport" href="#" target="_blank">export CSV</a>
+      </div>
+      <div class="row small muted" style="margin-top:8px" id="dSummary"></div>
+    </div>
+    <div class="panel"><div class="scroll"><table id="dTable"></table></div></div>
+  </section>
+
+  <!-- ----------------------------------------------------------------- epic -->
+  <section id="tab-epic" hidden>
+    <div class="panel">
+      <h2>EPIC processor</h2>
+      <div class="row">
+        <input id="epicInput" placeholder="e.g. TBG0342345" style="width:220px;text-transform:uppercase">
+        <button class="act" id="epicGo">look up</button>
+        <label class="small muted"><input type="checkbox" id="epicRefresh"> bypass cache</label>
+      </div>
+      <div id="epicResult" style="margin-top:12px"></div>
+    </div>
+    <div class="panel">
+      <h2>Recent lookups</h2>
+      <div class="scroll"><table id="epicTable"></table></div>
+    </div>
+  </section>
+
+  <!-- ----------------------------------------------------------------- logs -->
+  <section id="tab-logs" hidden>
+    <div class="panel">
+      <h2>Jobs</h2>
+      <div class="scroll"><table id="jobsTable"></table></div>
+    </div>
+    <div class="panel">
+      <h2>Events</h2>
+      <div class="scroll"><table id="eventsTable"></table></div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const state = { tab: "dash", states: [], summary: null, selState: null, selAc: null };
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2600);
+}
+async function api(path, opts) {
+  const r = await fetch(path, Object.assign({headers: {"Content-Type": "application/json"}},
+                                             opts || {}));
+  if (!r.ok) throw new Error((await r.text()).slice(0, 300));
+  return r.headers.get("content-type")?.includes("json") ? r.json() : r.text();
+}
+const post = (p, body) => api(p, {method: "POST", body: JSON.stringify(body || {})});
+const esc = (s) => (s === null || s === undefined) ? "" : String(s)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const nf = (n) => (n === null || n === undefined) ? "—" : Number(n).toLocaleString();
+
+function statusChip(s) { return `<span class="chip s-${esc(s)}">${esc(s || "?")}</span>`; }
+
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x === b));
+  document.querySelectorAll("main > section").forEach(s => s.hidden = true);
+  state.tab = b.dataset.tab;
+  $("#tab-" + state.tab).hidden = false;
+  refreshTab();
+});
+
+async function refreshTab() {
+  try {
+    if (state.tab === "dash") await loadDash();
+    else if (state.tab === "catalog") await loadStates();
+    else if (state.tab === "parts") await loadPartPickers();
+    else if (state.tab === "data") await loadDataPickers();
+    else if (state.tab === "epic") await loadEpicList();
+    else if (state.tab === "logs") { await loadJobs(); await loadEvents(); }
+  } catch (e) { toast(e.message); }
+}
+
+/* every relation / gender code actually present, so nothing collected goes
+   unlabelled or unnoticed */
+async function loadBreakdown() {
+  const b = await api("/api/breakdown");
+  const cov = b.coverage || {};
+  $("#relTable").innerHTML = "<thead><tr><th>code</th><th>relation type</th><th>rows</th>"
+    + "<th>mapped to current roll</th></tr></thead><tbody>"
+    + (b.relation || []).map(r => `<tr><td><b>${esc(r.code)}</b></td>
+        <td>${esc(r.label || r.code)}</td><td>${nf(r.n)}</td><td>${nf(r.mapped)}</td></tr>`).join("")
+    + "</tbody>";
+  $("#genTable").innerHTML = "<thead><tr><th>code</th><th>gender</th><th>rows</th>"
+    + "<th>mapped to current roll</th></tr></thead><tbody>"
+    + (b.gender || []).map(r => `<tr><td><b>${esc(r.code)}</b></td>
+        <td>${esc(r.label || r.code)}</td><td>${nf(r.n)}</td><td>${nf(r.mapped)}</td></tr>`).join("")
+    + "</tbody>";
+  $("#relNote").textContent = `${nf(cov.total)} rows · ${nf(cov.with_epic)} carry a current EPIC`
+    + ` · ${nf(cov.no_relative)} with no relative name · ${nf(cov.no_name)} with no name`;
+}
+
+/* One line summarising who currently HOLDS parts, from /api/summary.claimants
+   (picked up per running claimant kind). Empty on an idle system. */
+function deviationLine(claimants) {
+  if (!Array.isArray(claimants) || !claimants.length) return "";
+  const bits = claimants.map(c =>
+    `${c.kind}: ${c.count}`);
+  return bits.join(" · ");
+}
+
+/* dashboards */
+async function loadDash() {
+  const d = await api("/api/summary");
+  state.summary = d;
+  const o = d.overall || {};
+  const sp = d.speed || {};
+  const cur = sp.current || {};
+  const kpi = [
+    ["States", nf(o.states)], ["ACs", nf(o.acs)], ["Old parts", nf(o.old_parts)],
+    ["Parts done", `<span class="kpi-ok">${nf(o.done_parts)}</span>`],
+    ["Pending", `<span class="kpi-run">${nf(o.pending_parts)}</span>`],
+    ["Errors", `<span class="kpi-err">${nf(o.error_parts)}</span>`],
+    // Free = unprocessed, unclaimed and unreserved: exactly the pool another
+    // device's picker may scan (running parts belong to a device, reserved ones
+    // are held for a device's next few sweeps).
+    ["Free (unclaimed)",
+      `<span class="kpi-run">${nf(o.free_parts != null ? o.free_parts
+        : (o.pending_parts || 0) + (o.error_parts || 0))}</span>`],
+    // Reservations: the queue each device holds so two devices never rank the
+    // same part. `queue` is this device's own depth (it refills to N).
+    ["Reserved (queue)",
+      `<span class="kpi-run">${nf(o.reserved_parts || 0)}</span>
+       <div class="small muted">${(d.holds || []).map(h => `${esc(h.d)} ${h.c}`)
+         .join(" · ") || "none held"}${d.worker && d.worker.reserved
+         ? ` · this device ${d.worker.reserved}` : ""}</div>`],
+    ["Elector rows", nf(o.electors)], ["Unique EPICs", nf(o.unique_epics)],
+    ["EPIC lookups", nf(o.epic_lookups)],
+    // Collection speed, in units per second. `req/s` is serials actually fetched
+    // while parts were running (gateway-facing); `rec/s` is rows landed over the
+    // whole window, so it includes idle time.
+    ["Speed (live)", (cur.req_per_sec != null)
+      ? `<span class="kpi-run">${cur.req_per_sec}</span> <span class="small muted">req/s</span>
+         <div class="small muted">${cur.records_per_sec} rec/s${cur.eta_secs != null ? " · eta " + Math.round(cur.eta_secs) + "s" : ""}</div>`
+      : (cur.part_no ? `<span class="small muted">starting part ${esc(cur.part_no)}…</span>`
+        : `<span class="small muted">idle</span>`)],
+    ["Speed (avg busy)", sp.req_per_sec != null
+      ? `<span class="kpi-run">${sp.req_per_sec}</span> <span class="small muted">req/s</span>
+         <div class="small muted">${nf(sp.records_per_busy_sec)} rec/s while running · ${nf(sp.busy_secs)}s busy</div>`
+      : "—"],
+    ["Throughput", sp.records_per_sec != null
+      ? `${sp.records_per_sec} <span class="small muted">rec/s wall</span>
+         <div class="small muted">${sp.parts_per_hour} parts/h · ${nf(sp.records)} rows in ${sp.window_min}m</div>`
+      : "—"],
+  ];
+  $("#kpis").innerHTML = kpi.map(([k, v]) =>
+    `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+  const pct = o.old_parts ? Math.round(100 * o.done_parts / o.old_parts) : 0;
+  $("#kpis").insertAdjacentHTML("beforeend",
+    `<div class="card" style="grid-column:span 2"><div class="k">Coverage</div>
+       <div class="v">${pct}%</div><div class="bar"><i style="width:${pct}%"></i></div></div>`);
+
+  const w = d.worker || {};
+  $("#hdr-worker").textContent = "worker: " + (w.alive ? "running" : (w.running ? "STALLED" : "stopped")) +
+    (w.note ? " · " + w.note : "") +
+    (w.alive && w.reserved ? ` · queue ${w.reserved}` : "");
+  $("#hdr-worker").className = "badge" + (w.alive ? "" : " bad");
+  $("#workerRestart").hidden = !!w.alive;
+  const auto = !!d.settings.auto_enabled;
+  $("#autoToggle").checked = auto;
+  $("#hdr-auto").textContent = "auto: " + (auto ? "on" : "off");
+  $("#hdr-db").textContent = location.host;
+  $("#workersSel").value = d.settings.workers || 6;
+  $("#discoverMax").value = d.settings.discover_max_part || 400;
+  // Per-device scope: this server only controls ITS OWN tag when one is set;
+  // otherwise the dropdown writes the shared global defaults.
+  const devTag = d.settings.device_tag || "";
+  const devLine = deviationLine(d.claimants);
+  $("#workerState").dataset.deviceTag = devTag;
+  // Header identifies THIS device (its tag) and who else holds parts.
+  $("#hdr-db").textContent = location.host
+    + (devTag ? " · " + devTag : "") + (devLine ? " · " + devLine : "");
+  // Devices that opted out of / into auto on their own (the phone's switch):
+  // show them so a fleet-wide "auto off" here is never a surprise.
+  const overrides = (d.settings.auto_overrides || []).map(o =>
+    `${esc(String(o.key).split("@")[1] || "?")}: ${o.value ? "on" : "off"}`);
+  if (overrides.length) {
+    $("#hdr-auto").textContent = "auto: " + (auto ? "on" : "off")
+      + " (" + overrides.join(", ") + ")";
+  }
+  const partTxt = cur.part_no
+    ? ` <b>${esc(cur.state_cd)}</b> AC ${esc(cur.ac_no)} P${esc(cur.part_no)}
+        <b>${nf(cur.serial)}</b>${cur.roll_end ? "/" + nf(cur.roll_end) : ""} serials`
+    : "";
+  const speedTxt = cur.req_per_sec != null
+    ? ` · <b>${cur.req_per_sec} req/s</b> · ${cur.records_per_sec} rec/s`
+      + (cur.eta_secs != null ? ` · eta ${Math.round(cur.eta_secs)}s` : "")
+    : "";
+  $("#workerState").innerHTML = `auto <b>${auto ? "ON" : "off"}</b> · workers
+      <b>${esc(d.settings.workers)}</b>${devTag ? ` <span class="small muted">for ${esc(devTag)} (per-device; numbers changed here do not touch other devices)</span>` : ""}
+      · calibrate <b>${esc(d.settings.calibrate_offset)}</b>`
+      + partTxt + speedTxt;
+  loadBreakdownOnce();
+
+  $("#jobsLive").innerHTML = (d.jobs || []).length ? (d.jobs.map(j => {
+    const p = j.progress || {};
+    const detail = p.phase === "collect"
+      ? `serial ${p.serial}/${p.roll_end} · rows ${p.records} · EPICs ${p.epics}`
+      : p.phase === "discover" ? `part ${p.part}/${p.max} · found ${p.found}`
+      : p.phase === "auto" ? `collected ${p.finished}` : (j.kind);
+    const pct2 = p.roll_end ? Math.round(100 * (p.serial || 0) / p.roll_end) : 0;
+    return `<div class="card" style="margin-bottom:8px">
+      <div class="row"><b>#${j.id} ${esc(j.kind)}</b> ${statusChip(j.status)}
+        <span class="muted small">${esc(j.mode)}</span>
+        <span class="spacer" style="flex:1"></span>
+        <button class="act err" onclick="cancelJob(${j.id})">cancel</button></div>
+      <div class="small muted" style="margin-top:4px">${esc(detail)}</div>
+      ${pct2 ? `<div class="bar"><i style="width:${pct2}%"></i></div>` : ""}</div>`;
+  }).join("")) : '<span class="muted small">no queued/running jobs</span>';
+
+  $("#statesMini").innerHTML = "<thead><tr><th>state</th><th>name</th><th>ACs</th><th>parts</th><th>done</th><th>progress</th></tr></thead><tbody>"
+    + (d.states || []).map(s => {
+      const pct3 = s.parts ? Math.round(100 * s.done / s.parts) : 0;
+      return `<tr><td>${esc(s.state_cd)}</td><td>${esc(s.name)}</td><td>${nf(s.acs)}</td>
+        <td>${nf(s.parts)}</td><td>${nf(s.done)}</td>
+        <td style="min-width:120px"><div class="bar"><i style="width:${pct3}%"></i></div></td></tr>`;
+    }).join("") + "</tbody>";
+
+  const ev = await api("/api/events?limit=15");
+  $("#eventsDash").innerHTML = "<thead><tr><th>ts</th><th>level</th><th>src</th><th>message</th></tr></thead><tbody>"
+    + ev.map(e => `<tr><td class="small muted">${new Date(e.ts).toLocaleTimeString()}</td>
+        <td>${esc(e.level)}</td><td>${esc(e.source)}</td><td>${esc(e.message)}</td></tr>`).join("")
+    + "</tbody>";
+}
+
+$("#autoToggle").onchange = async (e) => {
+  await post("/api/auto", {enabled: e.target.checked});
+  toast("auto mode " + (e.target.checked ? "on" : "off")); loadDash();
+};
+$("#saveSettings").onclick = async () => {
+  // This dashboard manages THIS device: its tag rides along so the numbers
+  // land on '<key>@<tag>' instead of the shared row - the phone keeps its own.
+  await post("/api/settings", {workers: parseInt($("#workersSel").value, 10),
+                               discover_max_part: parseInt($("#discoverMax").value, 10),
+                               device_tag: $("#workerState").dataset.deviceTag || ""});
+  toast("settings saved"); loadDash();
+};
+async function cancelJob(id) { await post(`/api/jobs/${id}/cancel`, {}); toast("cancel requested"); loadDash(); }
+
+/* catalog */
+async function loadStates() {
+  const st = await api("/api/states");
+  state.states = st;
+  $("#statesTable").innerHTML = "<thead><tr><th>state</th><th>name</th><th>old data</th><th>ACs</th><th>parts</th><th>done</th><th></th></tr></thead><tbody>"
+    + st.map(s => `<tr><td>${esc(s.state_cd)}</td><td>${esc(s.name)}</td>
+        <td>${s.has_old_data ? '<span class="chip s-done">yes</span>' : '<span class="chip">?</span>'}</td>
+        <td>${nf(s.acs)}</td><td>${nf(s.parts)}</td><td>${nf(s.done)}</td>
+        <td><button class="act ghost" onclick="openAc('${esc(s.state_cd)}')">open ACs</button></td></tr>`).join("")
+    + "</tbody>";
+  fillSelects(st);
+}
+$("#seedStates").onclick = async () => { await post("/api/states/seed", {}); toast("seeding states…"); loadStates(); };
+$("#workerRestart").onclick = async () => {
+  const r = await post("/api/worker/restart", {});
+  toast(r.restarted ? "worker restarted" : "worker was already alive");
+  refreshTab();
+};
+$("#seedAllAcs").onclick = async () => {
+  await post("/api/acs/seed_all", {});
+  toast("queued AC seeding for every state…");
+  setTimeout(loadStates, 2500);
+};
+
+async function openAc(code) {
+  state.selState = code;
+  $("#acPanel").hidden = false;
+  $("#acStateLabel").textContent = code;
+  const acs = await api("/api/acs?state=" + encodeURIComponent(code));
+  $("#acsTable").innerHTML = "<thead><tr><th>AC</th><th>name</th><th>discover</th><th>old parts</th><th>done</th><th>parts table</th><th></th></tr></thead><tbody>"
+    + acs.map(a => `<tr><td>${esc(a.ac_no)}</td><td>${esc(a.name)}</td>
+        <td>${statusChip(a.discover_status)} ${a.old_parts_found ? "<span class='small muted'>" + a.old_parts_found + " parts</span>" : ""}</td>
+        <td>${nf(a.parts)}</td><td>${nf(a.done)}</td>
+        <td><button class="act ghost" onclick="showParts('${esc(a.state_cd)}',${a.ac_no})">view parts</button></td>
+        <td><button class="act" onclick="discover('${esc(a.state_cd)}',${a.ac_no})">discover parts</button></td></tr>`).join("")
+    + "</tbody>";
+}
+$("#seedAcs").onclick = async () => {
+  if (!state.selState) return toast("open a state first");
+  await post("/api/acs/seed", {state_cd: state.selState});
+  toast("seeding ACs…"); setTimeout(() => openAc(state.selState), 1500);
+};
+async function discover(sc, ac) {
+  await post("/api/acs/discover", {state_cd: sc, ac_no: ac});
+  toast(`discovering ${sc} AC ${ac} …`);
+}
+
+/* parts */
+function fillSelects(states) {
+  const opts = ['<option value="">— state —</option>']
+    .concat(states.map(s => `<option value="${esc(s.state_cd)}">${esc(s.state_cd)} ${esc(s.name || "")}</option>`));
+  ["#pState", "#dState"].forEach(sel => { const el = $(sel); if (el) el.innerHTML = opts.join(""); });
+}
+async function loadPartPickers() {
+  if (!state.states.length) await loadStates();
+  fillSelects(state.states);
+  if (state.selState) $("#pState").value = state.selState;
+}
+$("#pState").onchange = async (e) => {
+  const sc = e.target.value;
+  const acs = await api("/api/acs?state=" + encodeURIComponent(sc));
+  $("#pAc").innerHTML = '<option value="">— AC —</option>' + acs.map(a =>
+    `<option value="${a.ac_no}">${a.ac_no} ${esc(a.name || "")}</option>`).join("");
+};
+async function showParts(sc, ac) {
+  state.selState = sc; state.selAc = ac;
+  document.querySelector('nav button[data-tab="parts"]').click();
+  $("#pState").value = sc;
+  await $("#pState").onchange({target: {value: sc}});
+  $("#pAc").value = ac;
+  await loadParts();
+}
+$("#pLoad").onclick = () => loadParts();
+async function loadParts() {
+  const sc = $("#pState").value, ac = $("#pAc").value;
+  if (!sc || !ac) return toast("pick state and AC");
+  state.selState = sc; state.selAc = ac;
+  const q = $("#pFilter").value.trim(), st = $("#pStatus").value;
+  const url = `/api/parts?state=${encodeURIComponent(sc)}&ac=${ac}&limit=600`
+    + (st ? `&status=${st}` : "") + (q ? `&q=${encodeURIComponent(q)}` : "");
+  const d = await api(url);
+  const done = d.rows.filter(r => r.status === "done").length;
+  const recs = d.rows.reduce((a, r) => a + (r.records || 0), 0);
+  const eps = d.rows.reduce((a, r) => a + (r.epics || 0), 0);
+  const pct = d.rows.length ? Math.round(100 * done / d.rows.length) : 0;
+  $("#pSummary").innerHTML = `showing ${d.rows.length} of ${nf(d.total)} parts ·
+      done ${done} (${pct}%) · rows ${nf(recs)} · EPICs ${nf(eps)}`;
+  $("#partsTable").innerHTML = "<thead><tr><th>part</th><th>old name</th><th>status</th><th>records</th><th>EPICs</th>"
+    + "<th>roll end</th><th>offset</th><th>feeds current part</th><th>attempts</th><th></th></tr></thead><tbody>"
+    + d.rows.map(r => `<tr>
+        <td><b>${r.part_no}</b></td><td>${esc(r.name)}<div class="l1">${esc(r.cur_part_name || "")}</div></td>
+        <td>${statusChip(r.status)}${r.last_error ? `<div class="small" style="color:var(--err)">${esc(r.last_error).slice(0, 80)}</div>` : ""}</td>
+        <td>${nf(r.records)}</td><td>${nf(r.epics)}</td><td>${nf(r.roll_end)}</td>
+        <td>${r.offset === null ? "—" : esc(r.offset)}</td>
+        <td>${r.cur_part_mode === null ? "—" : esc(r.cur_part_mode)}</td>
+        <td>${nf(r.attempts)}</td>
+        <td class="row" style="gap:6px">
+          <button class="act" onclick="collect(${r.part_no})">${r.status === "done" ? "re-collect" : "collect"}</button>
+          <button class="act ghost" onclick="partDetail(${r.part_no})">detail</button>
+          <a class="act ghost" href="/api/export.csv?state=${encodeURIComponent(sc)}&ac=${ac}&part=${r.part_no}" target="_blank">csv</a>
+        </td></tr>`).join("") + "</tbody>";
+}
+async function collect(part) {
+  await post("/api/collect", {state_cd: state.selState, ac_no: state.selAc, part_no: part,
+                              force: true});
+  toast(`queued part ${part}`); setTimeout(loadParts, 1200);
+}
+$("#collectMissing").onclick = async () => {
+  if (!state.selState || !state.selAc) return toast("pick state and AC");
+  await post("/api/collect_auto", {state_cd: state.selState, ac_no: state.selAc,
+                                   max_parts: 60});
+  toast("queued auto collection for this AC"); 
+};
+$("#refreshCurParts").onclick = async () => {
+  if (!state.selState || !state.selAc) return toast("pick state and AC");
+  await api(`/api/current_parts?state=${encodeURIComponent(state.selState)}&ac=${state.selAc}&refresh=true`);
+  toast("current-roll parts refreshed"); loadParts();
+};
+async function partDetail(part) {
+  const d = await api(`/api/part?state=${encodeURIComponent(state.selState)}&ac=${state.selAc}&part=${part}`);
+  $("#partDetail").hidden = false;
+  $("#partDetailBody").innerHTML = `
+    <div class="row small muted">part ${d.part.part_no} · ${esc(d.part.name)} · status ${esc(d.part.status)}
+      · records ${nf(d.part.records)} · EPICs ${nf(d.part.epics)} · offset ${esc(d.part.offset)}</div>
+    <div class="flex2" style="margin-top:10px">
+      <div><h2 style="font-size:12px;color:var(--muted)">mapped into current parts</h2>
+        <table><thead><tr><th>state</th><th>AC</th><th>part</th><th>rows</th><th>EPICs</th></tr></thead><tbody>
+        ${(d.by_current_part || []).map(r => `<tr><td>${esc(r.cur_state_cd)}</td><td>${esc(r.cur_ac_no)}</td>
+          <td>${esc(r.cur_part_no)}</td><td>${nf(r.n)}</td><td>${nf(r.epics)}</td></tr>`).join("")}
+        </tbody></table></div>
+      <div><h2 style="font-size:12px;color:var(--muted)">relation types in this part</h2>
+        <table><thead><tr><th>code</th><th>relation</th><th>rows</th><th>mapped</th></tr></thead><tbody>
+        ${(d.by_relation || []).map(r => `<tr><td>${esc(r.relation_type)}</td>
+          <td>${esc(r.label || r.relation_type)}</td><td>${nf(r.n)}</td>
+          <td>${nf(r.mapped)}</td></tr>`).join("")}
+        </tbody></table></div>
+      <div><h2 style="font-size:12px;color:var(--muted)">first rows</h2>
+        <div class="scroll" style="max-height:300px"><table><thead><tr><th>sl</th><th>name</th><th>relation type</th><th>relative</th><th>EPIC</th><th>cur part</th></tr></thead><tbody>
+        ${(d.sample || []).map(r => `<tr><td>${esc(r.serial_no)}</td><td>${esc(r.full_name)}
+          <div class="l1">${esc(r.full_name_l1 || "")}</div></td>
+          <td>${esc(r.relation_label || r.relation_type)}</td>
+          <td>${esc(r.relative_name)}<div class="l1">${esc(r.relative_name_l1 || "")}</div></td>
+          <td>${esc(r.cur_epic)}</td>
+          <td>${esc(r.cur_part_no)}</td></tr>`).join("")}</tbody></table></div></div>
+    </div>`;
+}
+
+/* data browser */
+async function loadDataPickers() {
+  if (!state.states.length) await loadStates();
+  fillSelects(state.states);
+}
+$("#dState").onchange = async (e) => {
+  const acs = await api("/api/acs?state=" + encodeURIComponent(e.target.value));
+  $("#dAc").innerHTML = '<option value="">— AC —</option>' + acs.map(a =>
+    `<option value="${a.ac_no}">${a.ac_no} ${esc(a.name || "")}</option>`).join("");
+};
+$("#dLoad").onclick = loadData;
+async function loadData() {
+  const p = new URLSearchParams();
+  const sc = $("#dState").value, ac = $("#dAc").value;
+  if (sc) p.set("state", sc);
+  if (ac) p.set("ac", ac);
+  for (const [sel, key] of [["#dPart", "part"], ["#dCurPart", "cur_part"],
+                            ["#dEpic", "epic"], ["#dName", "q"]]) {
+    const v = $(sel).value.trim(); if (v) p.set(key, v);
+  }
+  p.set("limit", "200");
+  const d = await api("/api/electors?" + p.toString());
+  $("#dSummary").textContent = `showing ${d.rows.length} of ${nf(d.total)} rows`;
+  $("#dExport").href = "/api/export.csv?" + new URLSearchParams(
+    sc ? {state: sc, ac: ac || 1, part: $("#dPart").value || "", cur_part: $("#dCurPart").value || ""} : {}
+  ).toString();
+  $("#dTable").innerHTML = "<thead><tr><th>old part</th><th>sl</th><th>name</th>"
+    + "<th>relation type</th><th>relative</th><th>sex</th>"
+    + "<th>age'03</th><th>EPIC (current)</th><th>cur AC</th><th>cur part</th><th>BLO</th></tr></thead><tbody>"
+    + d.rows.map(r => `<tr><td>${esc(r.part_no)}</td><td>${esc(r.serial_no)}</td>
+        <td>${esc(r.full_name)}<div class="l1">${esc(r.full_name_l1 || "")}</div></td>
+        <td>${esc(r.relation_label || r.relation_type)}</td>
+        <td>${esc(r.relative_name)}<div class="l1">${esc(r.relative_name_l1 || "")}</div></td>
+        <td>${esc(r.gender_label || r.gender)}</td><td>${esc(r.age_snapshot)}</td>
+        <td><b>${esc(r.cur_epic)}</b></td><td>${esc(r.cur_ac_no)}</td><td>${esc(r.cur_part_no)}</td>
+        <td>${esc(r.marked_by_blo)}</td></tr>`).join("") + "</tbody>";
+}
+
+/* EPIC processor */
+$("#epicGo").onclick = async () => {
+  const epic = $("#epicInput").value.trim().toUpperCase();
+  if (!epic) return toast("enter an EPIC");
+  $("#epicResult").innerHTML = '<span class="muted">looking up …</span>';
+  try {
+    const d = await post("/api/epic", {epic, refresh: $("#epicRefresh").checked});
+    const r = d.row || {};
+    if (!r.epic) { $("#epicResult").innerHTML = '<span class="muted">no record</span>'; return; }
+    const rows = [["EPIC", r.epic], ["Name", r.name], ["Name (local)", r.name_local],
+      ["Relation", `${esc(r.relation || "")} (${esc(r.relation_type || "")})`],
+      ["Age", r.age], ["Gender", r.gender], ["State", `${esc(r.state_name || "")} (${esc(r.state_cd || "")})`],
+      ["District", r.district], ["AC", `${esc(r.ac_name || "")} (#${esc(r.ac_no)})`],
+      ["Part", `${esc(r.part_name || "")} (#${esc(r.part_no)})`], ["Serial", r.serial_no],
+      ["Section", r.section_no], ["Polling station", esc(r.ps_building || "") + " " + esc(r.ps_building_l1 || "")],
+      ["Record id", r.record_id], ["HTTP", r.http_status], ["Cached", d.cached ? "yes" : "fresh"]];
+    $("#epicResult").innerHTML = `<div class="card"><table><tbody>`
+      + rows.map(([k, v]) => `<tr><th style="width:170px">${k}</th><td>${v === null || v === undefined ? "—" : v}</td></tr>`).join("")
+      + `</tbody></table></div>`
+      + (r.raw ? `<details style="margin-top:10px"><summary class="muted small">raw record (85 fields)</summary>
+          <pre>${esc(JSON.stringify(r.raw, null, 1))}</pre></details>` : "");
+  } catch (e) { $("#epicResult").innerHTML = `<span style="color:var(--err)">${esc(e.message)}</span>`; }
+  loadEpicList();
+};
+async function loadEpicList() {
+  const d = await api("/api/epics?limit=40");
+  $("#epicTable").innerHTML = "<thead><tr><th>epic</th><th>found</th><th>name</th><th>AC</th><th>part</th>"
+    + "<th>serial</th><th>when</th></tr></thead><tbody>"
+    + d.map(r => `<tr><td><b>${esc(r.epic)}</b></td><td>${r.found ? '<span class="chip s-done">yes</span>' : '<span class="chip s-error">no</span>'}</td>
+        <td>${esc(r.name)}</td><td>${esc(r.ac_name)}</td><td>${esc(r.part_name)} (#${esc(r.part_no)})</td>
+        <td>${esc(r.serial_no)}</td><td class="small muted">${new Date(r.fetched_at).toLocaleString()}</td></tr>`).join("")
+    + "</tbody>";
+}
+
+/* logs */
+async function loadJobs() {
+  const d = await api("/api/jobs?limit=60");
+  $("#jobsTable").innerHTML = "<thead><tr><th>#</th><th>kind</th><th>mode</th><th>status</th><th>payload</th>"
+    + "<th>progress</th><th>started</th><th>finished</th><th>error</th></tr></thead><tbody>"
+    + d.map(j => `<tr><td>${j.id}</td><td>${esc(j.kind)}</td><td>${esc(j.mode)}</td>
+        <td>${statusChip(j.status)}</td><td class="small">${esc(JSON.stringify(j.payload))}</td>
+        <td class="small">${esc(JSON.stringify(j.progress))}</td>
+        <td class="small muted">${j.started_at ? new Date(j.started_at).toLocaleTimeString() : ""}</td>
+        <td class="small muted">${j.finished_at ? new Date(j.finished_at).toLocaleTimeString() : ""}</td>
+        <td class="small" style="color:var(--err)">${esc(j.error)}</td></tr>`).join("") + "</tbody>";
+}
+async function loadEvents() {
+  const d = await api("/api/events?limit=120");
+  $("#eventsTable").innerHTML = "<thead><tr><th>ts</th><th>level</th><th>source</th><th>message</th></tr></thead><tbody>"
+    + d.map(e => `<tr><td class="small muted">${new Date(e.ts).toLocaleString()}</td>
+        <td>${esc(e.level)}</td><td>${esc(e.source)}</td><td>${esc(e.message)}</td></tr>`).join("")
+    +    "</tbody>";
+}
+
+/* boot + polling.
+   loadBreakdown used to fire inside every dashboard refresh: its three
+   full-table aggregates over electors (relation / gender / coverage) take
+   seconds each on millions of rows and the whole dashboard was drenched in
+   BufferMapping waits, which in turn starved the collectors into
+   statement-timeout errors. It is a slow-changing value domain, so it runs
+   once on boot and can be reloaded from the tab itself. */
+let breakdownLoaded = false;
+function loadBreakdownOnce() {
+  if (breakdownLoaded) return;
+  breakdownLoaded = true;
+  loadBreakdown().catch(() => { breakdownLoaded = false; });
+}
+
+refreshTab();
+loadBreakdownOnce();
+setInterval(() => { if (state.tab === "dash") loadDash().catch(() => {});
+                    if (state.tab === "parts") loadParts().catch(() => {}); }, 3000);
+</script>
+</body>
+</html>
