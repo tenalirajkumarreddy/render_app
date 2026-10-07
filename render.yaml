@@ -1,17 +1,15 @@
 services:
   - type: web
     name: old-eci-dashboard
-    env: python
+    env: node
     region: oregon
     plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "uvicorn app:app --host 0.0.0.0 --port $PORT"
+    buildCommand: "npm install --production"
+    startCommand: "node server.js"
     envVars:
       - key: ECI_PG_DSN
         sync: false
-      - key: PYTHONUNBUFFERED
-        value: "1"
-      - key: PYTHONUTF8
-        value: "1"
       - key: ECI_DEVICE_TAG
         value: "render"
+      - key: NODE_ENV
+        value: "production"

@@ -1,0 +1,16 @@
+{
+  "name": "old-eci-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "old_eci collector dashboard (Node.js) — same interface as the Python/FastAPI app",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
